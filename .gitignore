@@ -11,3 +11,6 @@ wheels/
 
 .env
 data/cache/.
+
+# Local audit log (created at runtime)
+data/db/audit.db

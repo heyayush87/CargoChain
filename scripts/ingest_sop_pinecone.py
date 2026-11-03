@@ -48,7 +48,7 @@ EMBEDDINGS_MODEL_SETTING = os.getenv("Embeddings_model", "LOCAL").strip().upper(
 if EMBEDDINGS_MODEL_SETTING == "OPENAI":
     print("🤖 Mode: Utilizing Cloud OpenAI Embeddings (1536 Dim)...")
     embeddings = OpenAIEmbeddings()
-    INDEX_NAME = "fde-sop-index-openai"  # Isolated OpenAI Index
+    INDEX_NAME = "cold-chain-sop-index-openai"  # Isolated OpenAI Index
     TARGET_DIMENSION = 1536
 else:
     # Read the explicit model identifier casing string from the .env parameters
@@ -60,7 +60,7 @@ else:
         model_name=local_model_target,   # Passes parameter dynamically
         model_kwargs={'device': 'cpu'}
     )
-    INDEX_NAME = "fde-sop-index-local"   # Isolated Local Model Index
+    INDEX_NAME = "cold-chain-sop-index-local"   # Isolated Local Model Index
     TARGET_DIMENSION = 1024              # Standard width for BGE-M3
 
 # ==========================================

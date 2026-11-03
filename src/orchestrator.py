@@ -59,8 +59,8 @@ else:  # FALLBACK / DEFAULT RUNNER MODE
     from langchain_community.chat_models import ChatOllama
     llm = ChatOllama(model="qwen2.5:7b", temperature=0, num_predict=1024)
 
-fde_tools = [query_telemetry_db, fetch_corridor_conditions, search_compliance_sop]
-llm_with_tools = llm.bind_tools(fde_tools)
+agent_toolset = [query_telemetry_db, fetch_corridor_conditions, search_compliance_sop]
+llm_with_tools = llm.bind_tools(agent_toolset)
 
 # ==========================================
 # 3. GRAPH ARCHITECTURE ASSEMBLY
@@ -69,23 +69,23 @@ def reasoning_node(state: AgentState):
     response = llm_with_tools.invoke(state["messages"])
     return {"messages": [response]}
 
-print("⚙️ Compiling LangGraph FDE Orchestrator...")
+print("⚙️ Compiling LangGraph Orchestrator...")
 graph_builder = StateGraph(AgentState)
 graph_builder.add_node("reasoner", reasoning_node)
-graph_builder.add_node("tools", ToolNode(fde_tools))
+graph_builder.add_node("tools", ToolNode(agent_toolset))
 
 graph_builder.add_edge(START, "reasoner")
 graph_builder.add_conditional_edges("reasoner", tools_condition)
 graph_builder.add_edge("tools", "reasoner")
 
-fde_agent = graph_builder.compile(checkpointer=MemorySaver())
+agent = graph_builder.compile(checkpointer=MemorySaver())
 
 # ==========================================
 # 4. CHAT LOOP TESTING PANEL
 # ==========================================
 if __name__ == "__main__":
     print("\n" + "="*55)
-    print("🚀 FDE Supply Chain Orchestrator State Machine Online")
+    print("🚀 Supply Chain Orchestrator State Machine Online")
     print(f"   Configured Execution: [LLM: {AGENT_LLM_SETTING}] -> [Embeddings: {os.getenv('Embeddings_model', 'LOCAL')}]")
     print("="*55 + "\n")
     
@@ -101,14 +101,14 @@ if __name__ == "__main__":
     system_prompt = SystemMessage(content=system_instructions)
     
     thread_config = {"configurable": {"thread_id": "production_test_1"}}
-    fde_agent.invoke({"messages": [system_prompt]}, config=thread_config)
+    agent.invoke({"messages": [system_prompt]}, config=thread_config)
     
     while True:
         user_input = input("\nDispatcher > ")
         if user_input.lower() in ['exit', 'quit']:
             break
             
-        events = fde_agent.stream({"messages": [("user", user_input)]}, config=thread_config, stream_mode="updates")
+        events = agent.stream({"messages": [("user", user_input)]}, config=thread_config, stream_mode="updates")
         for event in events:
             for node_name, node_state in event.items():
                 if node_name == "tools":
@@ -116,4 +116,4 @@ if __name__ == "__main__":
                 elif node_name == "reasoner":
                     latest_msg = node_state["messages"][-1]
                     if latest_msg.content:
-                        print(f"\n🤖 FDE Agent:\n{latest_msg.content}")
+                        print(f"\n🤖 Agent:\n{latest_msg.content}")

@@ -2,12 +2,11 @@ import os
 import sys
 import uuid
 import json
-import urllib
 from pathlib import Path
 from dotenv import load_dotenv
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from langchain_core.messages import HumanMessage, ToolMessage
 
 # ==========================================
@@ -22,37 +21,18 @@ if str(project_root) not in sys.path:
 load_dotenv(project_root / ".env")
 
 # Import the compiled graph and tools list dynamically
-from src.orchestrator import fde_agent
+from src.orchestrator import agent
+from src.db import get_agent_engine, get_owner_engine, AUDIT_TABLE
 
 # ==========================================
-# 2. SQL CREDENTIALS MAPPING FROM .ENV
+# 2. AUDIT LOG WRITER (LEAST-PRIVILEGE AGENT ROLE)
 # ==========================================
-db_host = os.getenv("SQL_SERVER_HOST", "localhost")
-db_port = os.getenv("SQL_SERVER_PORT", "1433")
-db_user = os.getenv("SQL_AGENT_USER", "USR_FDE_RO")
-db_password = os.getenv("SQL_AGENT_PASSWORD")
-
-# Engine for the Agent to write logs using its standard credentials
-connection_string = (
-    f"DRIVER={{ODBC Driver 18 for SQL Server}};"
-    f"SERVER={db_host},{db_port};"
-    f"DATABASE=master;"
-    f"UID={db_user};"
-    f"PWD={db_password};"
-    f"Encrypt=no;"
-    f"TrustServerCertificate=yes;"
-)
-
-log_params = urllib.parse.quote_plus(connection_string)
-
-log_engine = create_engine(f"mssql+pyodbc:///?odbc_connect={log_params}")
-
 def write_audit_log(session_id, node_name, tool_name, content):
-    """Silently writes agent execution traces to the SQL audit table using agent permissions."""
+    """Silently writes agent execution traces to the audit table."""
     try:
-        with log_engine.connect() as conn:
-            conn.execute(text("""
-                INSERT INTO FDE_VIEWS.AgentAuditLog (SessionID, NodeExecuted, ToolName, Content)
+        with get_agent_engine().begin() as conn:
+            conn.execute(text(f"""
+                INSERT INTO {AUDIT_TABLE} (session_id, node_executed, tool_name, content)
                 VALUES (:session_id, :node_name, :tool_name, :content)
             """), {
                 "session_id": session_id,
@@ -60,7 +40,6 @@ def write_audit_log(session_id, node_name, tool_name, content):
                 "tool_name": tool_name,
                 "content": content
             })
-            conn.commit()
     except Exception as e:
         print(f"Audit Log Failed (Silent): {e}")
 
@@ -68,7 +47,7 @@ def write_audit_log(session_id, node_name, tool_name, content):
 # 3. PAGE CONFIGURATION & ENTERPRISE THEME
 # ==========================================
 st.set_page_config(
-    page_title="FDE Supply Chain Dispatch Console",
+    page_title="Cold-Chain Dispatch Console",
     page_icon="🧊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -98,7 +77,7 @@ thread_config = {"configurable": {"thread_id": st.session_state.thread_id}}
 # ==========================================
 with st.sidebar:
     st.image(str(script_dir / "image_L25X5q.png") if (script_dir / "image_L25X5q.png").exists() else "https://cdn-icons-png.flaticon.com/512/2830/2830305.png", width=65)
-    st.title("FDE Command Center")
+    st.title("Command Center")
     
     app_mode = st.radio("System Mode", ["🧊 Dispatch Console", "🛡️ Security & Audit Logs"])
     
@@ -147,7 +126,7 @@ if app_mode == "🧊 Dispatch Console":
             current_traces = [] 
             
             with st.status("🧠 Initializing Core Reasoner Node...", expanded=True) as status:
-                events = fde_agent.stream(
+                events = agent.stream(
                     {"messages": [HumanMessage(content=user_input)]}, 
                     config=thread_config,
                     stream_mode="updates"
@@ -231,7 +210,7 @@ elif app_mode == "🛡️ Security & Audit Logs":
     # TAB 2: AUDIT LOG VIEWER (REQUIRES ADMIN CREDENTIALS FROM .ENV OR INPUT)
     # ------------------------------------------
     st.title("🛡️ Enterprise Agent Audit Trail")
-    st.caption("Secure database inspection of FDE_VIEWS.AgentAuditLog")
+    st.caption("Secure database inspection of the agent audit log")
     
     st.markdown("### Database Authorization Gate")
     st.markdown("Enter high-privilege administrative credentials (defined in `.env` as `SQL_ADMIN_USER`) to query audit logs.")
@@ -251,26 +230,15 @@ elif app_mode == "🛡️ Security & Audit Logs":
         
         if input_user == expected_admin_user and input_pass == expected_admin_pass:
             try:
-                # Build an isolated admin connection string for viewing data
-                admin_params = urllib.parse.quote_plus(
-                    "DRIVER={ODBC Driver 18 for SQL Server};"
-                    f"SERVER={db_host},{db_port};"
-                    "DATABASE=master;"
-                    f"UID={input_user};"
-                    f"PWD={input_pass};"
-                    "Encrypt=no;"
-                    "TrustServerCertificate=yes;"
-                )
-                admin_engine = create_engine(f"mssql+pyodbc:///?odbc_connect={admin_params}")
-                
-                with admin_engine.connect() as conn:
-                    query = """
-                        SELECT LogID, Timestamp, SessionID, NodeExecuted, ToolName, Content 
-                        FROM FDE_VIEWS.AgentAuditLog 
-                        ORDER BY Timestamp DESC
+                with get_owner_engine().connect() as conn:
+                    query = f"""
+                        SELECT log_id AS "LogID", timestamp AS "Timestamp", session_id AS "SessionID",
+                               node_executed AS "NodeExecuted", tool_name AS "ToolName", content AS "Content"
+                        FROM {AUDIT_TABLE}
+                        ORDER BY timestamp DESC
                     """
                     df = pd.read_sql(query, conn)
-                
+
                 st.success("✅ Authenticated successfully as Admin.")
                 
                 if not df.empty:

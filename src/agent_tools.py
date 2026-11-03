@@ -1,13 +1,14 @@
 import os
-import urllib
 import requests
 from pathlib import Path
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
 
+from sqlalchemy import text
 from langchain_core.tools import tool
 from langchain_openai import OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
+
+from src.db import get_agent_engine
 
 # ==========================================
 # 1. ENVIRONMENT & DYNAMIC INDEX ATTACHMENT
@@ -40,10 +41,6 @@ def get_cached_huggingface_embeddings(model_name: str):
 
 EMBEDDINGS_MODEL_SETTING = os.getenv("Embeddings_model", "LOCAL").strip().upper()
 
-db_host = os.getenv("SQL_SERVER_HOST", "localhost")
-db_port = os.getenv("SQL_SERVER_PORT", "1433")
-db_user = os.getenv("SQL_AGENT_USER", "USR_FDE_RO")
-db_password = os.getenv("SQL_AGENT_PASSWORD")
 
 if not PINECONE_API_KEY:
     raise ValueError("CRITICAL: Ensure PINECONE_API_KEY is present in your active .env profile.")
@@ -51,7 +48,7 @@ if not PINECONE_API_KEY:
 if EMBEDDINGS_MODEL_SETTING == "OPENAI":
     print("🤖 Mode: Connecting to Cloud OpenAI Index (1536 Dim Space)...")
     embeddings = OpenAIEmbeddings()
-    INDEX_NAME = "fde-sop-index-openai"
+    INDEX_NAME = "cold-chain-sop-index-openai"
 else :
     local_model_target = os.getenv("Local_Embedding_Model", "BAAI/bge-m3").strip()
     
@@ -68,55 +65,45 @@ else :
         from langchain_huggingface import HuggingFaceEmbeddings
         embeddings = HuggingFaceEmbeddings(model_name=local_model_target, model_kwargs={'device': 'cpu'})
 
-    INDEX_NAME = "fde-sop-index-local"
+    INDEX_NAME = "cold-chain-sop-index-local"
 
 vector_store = PineconeVectorStore(index_name=INDEX_NAME, embedding=embeddings)
 retriever = vector_store.as_retriever(search_kwargs={"k": 2})
 
 # ==========================================
-# 2. CORE FDE AGENT TOOLS
+# 2. CORE AGENT TOOLS
 # ==========================================
 
 @tool
 def query_telemetry_db(sql_query: str) -> str:
     """
-    Executes a SQL SELECT query against the FDE_VIEWS.VW_ACTIVE_FLEET view.
+    Executes a SQL SELECT query against the analytics.vw_active_fleet view.
     Columns available:
-    Timestamp, Latitude, Longitude, Current_Temperature_C, Cargo_Condition_Code,
-    Risk_Classification, Delay_Probability, Port_Congestion_Level, Route_Risk_Index.
-    Always write standard T-SQL queries.
+    timestamp, latitude, longitude, current_temperature_c, cargo_condition_code,
+    risk_classification, delay_probability, port_congestion_level, route_risk_index.
+    Always write PostgreSQL-compatible SQL (use LIMIT, not TOP).
     """
-    connection_string = (
-            f"DRIVER={{ODBC Driver 18 for SQL Server}};"
-            f"SERVER={db_host},{db_port};"
-            f"DATABASE=master;"
-            f"UID={db_user};"
-            f"PWD={db_password};"
-            f"Encrypt=no;"
-            f"TrustServerCertificate=yes;"
-        )
+    statement = sql_query.strip().rstrip(";").strip()
+    if not statement.upper().startswith("SELECT"):
+        return "SECURITY BLOCK: Only SELECT operations are authorized on this view."
+    if ";" in statement:
+        return "SECURITY BLOCK: Only a single SQL statement is allowed."
 
-    params = urllib.parse.quote_plus(connection_string)
-    
-    engine = create_engine(f"mssql+pyodbc:///?odbc_connect={params}")
-    
     try:
-        if not sql_query.strip().upper().startswith("SELECT"):
-            return "SECURITY BLOCK: Only SELECT operations are authorized on this view."
-            
-        with engine.connect() as conn:
-            cursor = conn.execute(text(sql_query))
+        # Least-privilege role, and every query runs inside a read-only transaction
+        with get_agent_engine().connect().execution_options(postgresql_readonly=True) as conn:
+            cursor = conn.execute(text(statement))
             columns = list(cursor.keys())
             rows = cursor.fetchmany(10)
-            
-            if not rows:
-                return "No records matched the query criteria."
-                
-            formatted_output = f"COLUMNS: {', '.join(columns)}\n"
-            for row in rows:
-                formatted_output += str(tuple(row)) + "\n"
-                
-            return formatted_output
+
+        if not rows:
+            return "No records matched the query criteria."
+
+        formatted_output = f"COLUMNS: {', '.join(columns)}\n"
+        for row in rows:
+            formatted_output += str(tuple(row)) + "\n"
+
+        return formatted_output
     except Exception as e:
         return f"Database Error: {str(e)}"
 
@@ -171,7 +158,7 @@ def search_compliance_sop(query: str) -> str:
 # ==========================================
 if __name__ == "__main__":
     print("\n--- Testing Tool 1: SQL Telemetry View ---")
-    print(query_telemetry_db.invoke("SELECT TOP 2 Latitude, Longitude, Current_Temperature_C FROM FDE_VIEWS.VW_ACTIVE_FLEET"))
+    print(query_telemetry_db.invoke("SELECT latitude, longitude, current_temperature_c FROM analytics.vw_active_fleet LIMIT 2"))
     
     print("\n--- Testing Tool 2: Live Corridor API ---")
     print(fetch_corridor_conditions.invoke({"latitude": 33.77, "longitude": -118.19}))
