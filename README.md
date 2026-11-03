@@ -164,6 +164,6 @@ Designed for Streamlit Community Cloud with Neon as the database. The slim `requ
 - The audit viewer uses a single shared admin login and is meant for demos.
 - There is no automated evaluation set yet, so answer quality is checked by hand.
 
-## Acknowledgements
 
-Adapted from the open-source [cold-chain-logistics-FDE-Project](https://github.com/nimowhyca/cold-chain-logistics-FDE-Project) by nimowhyca. Changes in this version: the database moved from SQL Server to PostgreSQL on Neon, the data-access layer was rewritten around a least-privilege role with read-only, single-statement query guards, and the app was prepared for free-tier deployment.
+
+ 
