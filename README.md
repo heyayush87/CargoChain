@@ -1,5 +1,8 @@
 # CargoChain 🧊🚚
 
+
+🌐 **[Live demo](https://cargochain-9cdqpyffywbljmea3wpn6k.streamlit.app/)**
+
 **An AI dispatcher that can't break your database.**
 
 CargoChain is a tool-calling agent for refrigerated logistics. A dispatcher asks a question in plain English; the agent decides whether it needs fleet data, live weather, the company SOP, or nothing at all, then replies with an analysis and an action plan.
