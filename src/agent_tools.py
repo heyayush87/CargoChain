@@ -9,6 +9,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 
 from src.db import get_agent_engine
+from src.sql_guard import validate_select, SqlRejected, MAX_PLAN_COST
 
 # ==========================================
 # 1. ENVIRONMENT & DYNAMIC INDEX ATTACHMENT
@@ -83,15 +84,20 @@ def query_telemetry_db(sql_query: str) -> str:
     risk_classification, delay_probability, port_congestion_level, route_risk_index.
     Always write PostgreSQL-compatible SQL (use LIMIT, not TOP).
     """
-    statement = sql_query.strip().rstrip(";").strip()
-    if not statement.upper().startswith("SELECT"):
-        return "SECURITY BLOCK: Only SELECT operations are authorized on this view."
-    if ";" in statement:
-        return "SECURITY BLOCK: Only a single SQL statement is allowed."
+    try:
+        statement = validate_select(sql_query)
+    except SqlRejected as e:
+        return f"SECURITY BLOCK: {e}"
 
     try:
         # Least-privilege role, and every query runs inside a read-only transaction
         with get_agent_engine().connect().execution_options(postgresql_readonly=True) as conn:
+            plan = conn.execute(text(f"EXPLAIN (FORMAT JSON) {statement}")).scalar()
+            plan_cost = plan[0]["Plan"]["Total Cost"]
+            if plan_cost > MAX_PLAN_COST:
+                return (f"QUERY REJECTED: estimated cost {plan_cost:,.0f} exceeds the limit of "
+                        f"{MAX_PLAN_COST:,.0f}. Add filters or aggregate the data.")
+
             cursor = conn.execute(text(statement))
             columns = list(cursor.keys())
             rows = cursor.fetchmany(10)
@@ -111,7 +117,8 @@ def query_telemetry_db(sql_query: str) -> str:
 def fetch_corridor_conditions(latitude: float, longitude: float) -> str:
     """
     Fetches real-time weather and corridor conditions from a live REST API for given GPS coordinates.
-    Provides temperature, wind speed, and computed corridor congestion index.
+    Provides temperature, wind speed, and a rough wind-based disruption indicator.
+    The indicator is a prototype heuristic, not a validated logistics risk model.
     """
     try:
         url = f"https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current_weather=true"
@@ -122,14 +129,15 @@ def fetch_corridor_conditions(latitude: float, longitude: float) -> str:
         temp = payload.get("temperature", "N/A")
         wind = payload.get("windspeed", 0.0)
         
+        # Prototype heuristic: a single wind-speed cutoff, not a validated risk model
         congestion_index = 8.5 if wind > 10.0 else 2.5
         status_note = "High Transit Disruption" if wind > 10.0 else "Corridor Normal"
-        
+
         return (
             f"--- LIVE CORRIDOR TELEMETRY ---\n"
             f"Target GPS: {latitude}, {longitude}\n"
             f"External Temp: {temp}°C | Wind Speed: {wind} km/h\n"
-            f"Corridor Risk: {status_note} (Congestion Index: {congestion_index}/10)\n"
+            f"Corridor Risk (heuristic, wind-speed only): {status_note} (Indicative Index: {congestion_index}/10)\n"
             f"-------------------------------"
         )
     except Exception as e:

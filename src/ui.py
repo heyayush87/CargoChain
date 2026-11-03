@@ -2,6 +2,7 @@ import os
 import sys
 import uuid
 import json
+import logging
 from pathlib import Path
 from dotenv import load_dotenv
 import streamlit as st
@@ -24,24 +25,34 @@ load_dotenv(project_root / ".env")
 from src.orchestrator import agent
 from src.db import get_agent_engine, get_owner_engine, AUDIT_TABLE
 
+logger = logging.getLogger("cargochain.audit")
+
 # ==========================================
 # 2. AUDIT LOG WRITER (LEAST-PRIVILEGE AGENT ROLE)
 # ==========================================
 def write_audit_log(session_id, node_name, tool_name, content):
-    """Silently writes agent execution traces to the audit table."""
-    try:
-        with get_agent_engine().begin() as conn:
-            conn.execute(text(f"""
-                INSERT INTO {AUDIT_TABLE} (session_id, node_executed, tool_name, content)
-                VALUES (:session_id, :node_name, :tool_name, :content)
-            """), {
-                "session_id": session_id,
-                "node_name": node_name,
-                "tool_name": tool_name,
-                "content": content
-            })
-    except Exception as e:
-        print(f"Audit Log Failed (Silent): {e}")
+    """Writes an agent trace to the audit table. Retries once, and surfaces failure instead of hiding it."""
+    last_error = None
+    for _ in range(2):
+        try:
+            with get_agent_engine().begin() as conn:
+                conn.execute(text(f"""
+                    INSERT INTO {AUDIT_TABLE} (session_id, node_executed, tool_name, content)
+                    VALUES (:session_id, :node_name, :tool_name, :content)
+                """), {
+                    "session_id": session_id,
+                    "node_name": node_name,
+                    "tool_name": tool_name,
+                    "content": content
+                })
+            return True
+        except Exception as e:
+            last_error = e
+
+    logger.error("Audit log write failed (session %s, %s/%s): %s",
+                 session_id, node_name, tool_name, last_error)
+    st.session_state.audit_failures = st.session_state.get("audit_failures", 0) + 1
+    return False
 
 # ==========================================
 # 3. PAGE CONFIGURATION & ENTERPRISE THEME
@@ -192,7 +203,13 @@ if app_mode == "🧊 Dispatch Console":
                                     )
                 
                 status.update(label="Incident Matrix Evaluation Complete", state="complete", expanded=False)
-                
+
+            if st.session_state.get("audit_failures"):
+                st.warning(
+                    f"⚠️ {st.session_state.audit_failures} audit log write(s) failed this session. "
+                    "The audit trail may be incomplete; check the server logs."
+                )
+
             if final_response:
                 st.markdown(final_response)
                 st.session_state.ui_messages.append({

@@ -9,3 +9,6 @@ streamlit==1.62.0
 requests
 psycopg[binary]==3.3.7
 SQLAlchemy==2.0.52
+sqlglot==30.29.0
+langgraph-checkpoint-postgres==3.1.2
+psycopg-pool==3.3.3

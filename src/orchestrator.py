@@ -78,7 +78,33 @@ graph_builder.add_edge(START, "reasoner")
 graph_builder.add_conditional_edges("reasoner", tools_condition)
 graph_builder.add_edge("tools", "reasoner")
 
-agent = graph_builder.compile(checkpointer=MemorySaver())
+def build_checkpointer():
+    """Persist conversation state in PostgreSQL so it survives restarts and sleeping containers."""
+    try:
+        from psycopg.rows import dict_row
+        from psycopg_pool import ConnectionPool
+        from langgraph.checkpoint.postgres import PostgresSaver
+        from src.db import _owner_url
+
+        conninfo = _owner_url().set(drivername="postgresql").render_as_string(hide_password=False)
+        pool = ConnectionPool(
+            conninfo,
+            min_size=1,
+            max_size=3,
+            kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+            check=ConnectionPool.check_connection,
+        )
+        saver = PostgresSaver(pool)
+        saver.setup()  # creates the checkpoint tables on first run
+        print("💾 Checkpointer: PostgreSQL (persistent)")
+        return saver
+    except Exception as e:
+        print(f"⚠️ Checkpointer: PostgreSQL unavailable ({e}). Falling back to in-memory MemorySaver; "
+              "conversations will be lost on restart.")
+        return MemorySaver()
+
+
+agent = graph_builder.compile(checkpointer=build_checkpointer())
 
 # ==========================================
 # 4. CHAT LOOP TESTING PANEL

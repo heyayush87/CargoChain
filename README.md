@@ -71,8 +71,8 @@ Four independent layers, so a failure in one does not expose the data:
 
 1. **A semantic view.** The agent only knows readable column names, never the raw legacy schema.
 2. **Least-privilege role.** `agent_ro` can `SELECT` the view and `INSERT` into the audit log. Reading the raw table, updating the view, dropping objects and reading the audit log are all denied by the database.
-3. **Query guards in the tool.** Only a single `SELECT` statement is accepted, and every query runs in a read-only transaction.
-4. **Audit trail.** Each reasoning step and tool call is stored and viewable in an admin-protected page.
+3. **Query guards in the tool.** The model's SQL is parsed with `sqlglot`, not string-matched. Only a single `SELECT` on the one approved view is accepted (no DML or DDL, other tables, `INTO`, or `pg_*` functions), rows are capped at 100, and an `EXPLAIN` cost ceiling rejects runaway queries before they execute. Every query also runs in a read-only transaction with a 10 s statement timeout. These checks give the model clear errors; the database role remains the real security boundary.
+4. **Audit trail.** Each reasoning step and tool call is stored and viewable in an admin-protected page. A failed audit write is retried, logged, and shown to the operator in the UI instead of being swallowed.
 
 ## Setup pipeline
 
@@ -165,6 +165,8 @@ Designed for Streamlit Community Cloud with Neon as the database. The slim `requ
 - The sample data is historical and treated as "active" fleet data for demonstration.
 - The free tiers used (Neon, Pinecone, Streamlit) sleep when idle, so the first request after a pause is slower.
 - The audit viewer uses a single shared admin login and is meant for demos.
+- The corridor risk indicator is a prototype heuristic (a single wind-speed threshold), not a validated logistics risk model.
+- Conversation state is checkpointed to PostgreSQL; if that is unavailable the app falls back to in-memory state and logs a warning.
 - There is no automated evaluation set yet, so answer quality is checked by hand.
 
 
